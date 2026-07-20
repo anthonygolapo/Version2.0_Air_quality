@@ -1,0 +1,19 @@
+{
+  "deviceId": "AQ01",
+  "sequenceNumber": 1842,
+  "measuredAt": "2026-07-17T10:00:00.000Z",
+  "pm1": 8.4,
+  "pm25": 11.2,
+  "pm10": 16.7,
+  "co": 0.42,
+  "no2": 0.011,
+  "o3": 0.029,
+  "so2": 0.004,
+  "temperatureC": 31.8,
+  "humidityPercent": 74.2,
+  "batteryVoltage": 3.91,
+  "solarVoltage": 5.14,
+  "signalStrength": -63,
+  "firmwareVersion": "esp32s3-2.0.0",
+  "alarmFlags": 0
+}

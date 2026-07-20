@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.db
+*.db-shm
+*.db-wal
+data/certs/server.crt
+data/certs/server.key
+firmware/build/
+firmware/sdkconfig

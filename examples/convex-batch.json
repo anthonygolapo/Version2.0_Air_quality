@@ -1,0 +1,28 @@
+{
+  "batchId": "web-20260717T100000Z-000001",
+  "timestamp": "2026-07-17T10:10:00.000Z",
+  "credentialVersion": 1,
+  "records": [
+    {
+      "deviceId": "AQ01",
+      "sequenceNumber": 1842,
+      "measuredAt": "2026-07-17T10:00:00.000Z",
+      "receivedAt": "2026-07-17T10:00:02.000Z",
+      "payloadHash": "adf9cfe0a0b711de5c14fd2fc5c989ec70af3c05c4d98e50fe18af4d4abfa5e5",
+      "pm1": 8.4,
+      "pm25": 11.2,
+      "pm10": 16.7,
+      "co": 0.42,
+      "no2": 0.011,
+      "o3": 0.029,
+      "so2": 0.004,
+      "temperatureC": 31.8,
+      "humidityPercent": 74.2,
+      "batteryVoltage": 3.91,
+      "solarVoltage": 5.14,
+      "signalStrength": -63,
+      "firmwareVersion": "esp32s3-2.0.0",
+      "alarmFlags": 0
+    }
+  ]
+}

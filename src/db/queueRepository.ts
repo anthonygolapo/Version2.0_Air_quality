@@ -68,7 +68,7 @@ export class QueueRepository {
           last_error = COALESCE(last_error, 'stale_processing_recovered')
       WHERE status = 'processing' AND claimed_at < $1::timestamptz
     `, [staleBefore]);
-    return result.rowCount;
+    return result.rowCount ?? 0;
   }
 
   async claimBatch(limit: number, workerId: string): Promise<QueueRecord[]> {

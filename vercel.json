@@ -5,11 +5,5 @@
       "memory": 1024,
       "maxDuration": 300
     }
-  },
-  "crons": [
-    {
-      "path": "/api/internal/forward",
-      "schedule": "*/10 * * * *"
-    }
-  ]
+  }
 }

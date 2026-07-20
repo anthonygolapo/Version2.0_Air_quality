@@ -47,7 +47,7 @@ http.route({
     }
 
     const rawBody = await request.text();
-    if (!verifyConvexSignature(rawBody, { batchId, timestamp, credentialVersion, signature })) {
+    if (!await verifyConvexSignature(rawBody, { batchId, timestamp, credentialVersion, signature })) {
       return new Response(JSON.stringify({
         status: "error",
         code: "authentication_failed",
@@ -83,7 +83,7 @@ http.route({
 
     const result = await ctx.runMutation(api.readings.ingestBatch, {
       batchId,
-      requestHash: sha256Hex(rawBody),
+      requestHash: await sha256Hex(rawBody),
       timestamp,
       records: records as never
     });

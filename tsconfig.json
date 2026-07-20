@@ -13,6 +13,6 @@
   },
   "include": [
     "src/**/*.ts",
-    "convex/**/*.ts"
+    "api/**/*.ts"
   ]
 }

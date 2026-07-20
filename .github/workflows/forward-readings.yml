@@ -1,0 +1,50 @@
+name: Forward readings to Convex
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: forward-readings-to-convex
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Vercel forwarding cycle
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "CRON_SECRET repository secret is not configured."
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          http_code="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --max-time 240 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "https://version2-0-air-quality.vercel.app/api/internal/forward")"
+
+          cat "$response_file"
+          echo
+
+          if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+            echo "Forwarding endpoint returned HTTP ${http_code}."
+            exit 1
+          fi

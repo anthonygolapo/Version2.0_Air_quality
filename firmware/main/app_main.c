@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "config.h"
 #include "esp_log.h"
@@ -18,6 +19,8 @@
 
 static const char *TAG = "app_main";
 static const size_t MAX_BATCHES_PER_CYCLE = 3;
+static queued_reading_t batch_queue[HTTP_UPLOAD_MAX_BATCH_SIZE];
+static const sensor_reading_t *batch_readings[HTTP_UPLOAD_MAX_BATCH_SIZE];
 
 static uint32_t compute_backoff_ms(uint32_t attempt) {
   uint32_t capped_attempt = attempt > 6 ? 6 : attempt;
@@ -38,14 +41,13 @@ static void flush_ready_batches(void) {
   size_t batches_sent = 0;
 
   while (local_queue_count() >= HTTP_UPLOAD_MAX_BATCH_SIZE && batches_sent < MAX_BATCHES_PER_CYCLE) {
-    queued_reading_t queued[HTTP_UPLOAD_MAX_BATCH_SIZE] = {0};
-    size_t queued_count = local_queue_peek_oldest_batch(queued, HTTP_UPLOAD_MAX_BATCH_SIZE);
+    memset(batch_queue, 0, sizeof(batch_queue));
+    size_t queued_count = local_queue_peek_oldest_batch(batch_queue, HTTP_UPLOAD_MAX_BATCH_SIZE);
     if (queued_count != HTTP_UPLOAD_MAX_BATCH_SIZE) {
       return;
     }
 
-    const sensor_reading_t *readings[HTTP_UPLOAD_MAX_BATCH_SIZE];
-    for (size_t index = 0; index < queued_count; index++) readings[index] = &queued[index].reading;
+    for (size_t index = 0; index < queued_count; index++) batch_readings[index] = &batch_queue[index].reading;
 
     char batch_id[64];
     snprintf(
@@ -53,25 +55,25 @@ static void flush_ready_batches(void) {
       sizeof(batch_id),
       "%s-%010u-%010u",
       DEVICE_ID,
-      (unsigned)queued[0].reading.sequence_number,
-      (unsigned)queued[queued_count - 1].reading.sequence_number
+      (unsigned)batch_queue[0].reading.sequence_number,
+      (unsigned)batch_queue[queued_count - 1].reading.sequence_number
     );
 
     int status_code = 0;
     batch_upload_result_t result;
-    if (http_upload_batch(readings, queued_count, batch_id, &result, &status_code)) {
+    if (http_upload_batch(batch_readings, queued_count, batch_id, &result, &status_code)) {
       size_t handled = 0;
       for (size_t index = 0; index < queued_count; index++) {
-        uint32_t sequence = queued[index].reading.sequence_number;
+        uint32_t sequence = batch_queue[index].reading.sequence_number;
         if (sequence_in_list(sequence, result.confirmed, result.confirmed_count)) {
-          if (local_queue_delete(queued[index].path)) {
+          if (local_queue_delete(batch_queue[index].path)) {
             handled++;
             ESP_LOGI(TAG, "Convex confirmed and deleted reading %u", (unsigned)sequence);
           } else {
             ESP_LOGW(TAG, "Convex confirmed reading %u but local deletion failed", (unsigned)sequence);
           }
         } else if (sequence_in_list(sequence, result.terminal, result.terminal_count)) {
-          if (local_queue_mark_dead_letter(queued[index].path)) {
+          if (local_queue_mark_dead_letter(batch_queue[index].path)) {
             handled++;
             ESP_LOGE(TAG, "Reading %u moved to dead letter after permanent rejection", (unsigned)sequence);
           } else {

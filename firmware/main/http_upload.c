@@ -20,6 +20,8 @@ typedef struct {
   bool overflowed;
 } response_buffer_t;
 
+static response_buffer_t response_buffer;
+
 static esp_err_t http_event_handler(esp_http_client_event_t *event) {
   response_buffer_t *response = (response_buffer_t *)event->user_data;
   if (event->event_id != HTTP_EVENT_ON_DATA || response == NULL || event->data_len <= 0) {
@@ -109,7 +111,7 @@ bool http_upload_batch(
 
   char credential_version[8];
   snprintf(credential_version, sizeof(credential_version), "%d", DEVICE_CREDENTIAL_VERSION);
-  response_buffer_t response = {0};
+  memset(&response_buffer, 0, sizeof(response_buffer));
   esp_http_client_config_t client_config = {
     .url = NODE_SERVER_URL,
     .method = HTTP_METHOD_POST,
@@ -118,7 +120,7 @@ bool http_upload_batch(
     .crt_bundle_attach = esp_crt_bundle_attach,
     .skip_cert_common_name_check = false,
     .event_handler = http_event_handler,
-    .user_data = &response
+    .user_data = &response_buffer
   };
 
   esp_http_client_handle_t client = esp_http_client_init(&client_config);
@@ -148,14 +150,14 @@ bool http_upload_batch(
   ESP_LOGI(TAG, "Managed API returned HTTP %d for batch %s", response_code, batch_id);
 
   bool parsed = false;
-  if (response_code == 200 && !response.overflowed) {
+  if (response_code == 200 && !response_buffer.overflowed) {
     parsed =
-      parse_sequence_array(response.data, "acceptedSequenceNumbers", result->confirmed, &result->confirmed_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
-      parse_sequence_array(response.data, "duplicateSequenceNumbers", result->confirmed, &result->confirmed_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
-      parse_sequence_array(response.data, "conflictingSequenceNumbers", result->terminal, &result->terminal_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
-      parse_sequence_array(response.data, "rejectedSequenceNumbers", result->terminal, &result->terminal_count, HTTP_UPLOAD_MAX_BATCH_SIZE);
+      parse_sequence_array(response_buffer.data, "acceptedSequenceNumbers", result->confirmed, &result->confirmed_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
+      parse_sequence_array(response_buffer.data, "duplicateSequenceNumbers", result->confirmed, &result->confirmed_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
+      parse_sequence_array(response_buffer.data, "conflictingSequenceNumbers", result->terminal, &result->terminal_count, HTTP_UPLOAD_MAX_BATCH_SIZE) &&
+      parse_sequence_array(response_buffer.data, "rejectedSequenceNumbers", result->terminal, &result->terminal_count, HTTP_UPLOAD_MAX_BATCH_SIZE);
   }
-  if (response.overflowed) ESP_LOGW(TAG, "Managed API response exceeded local response buffer");
+  if (response_buffer.overflowed) ESP_LOGW(TAG, "Managed API response exceeded local response buffer");
 
   esp_http_client_cleanup(client);
   reading_json_free(payload);

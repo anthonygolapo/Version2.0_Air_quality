@@ -1,167 +1,136 @@
-# Vercel Air-Quality Ingestion System
+# Direct ESP32 Air-Quality Ingestion
 
 ## Architecture
 
 ```text
-ESP32-S3
-  -> HTTPS POST every 60 seconds
-  -> HMAC-SHA256 signed request
-  -> durable SPIFFS queue for unsent readings
-
-Vercel Functions
-  -> public HTTPS endpoint at /api/v1/readings
-  -> Fastify request validation and HMAC verification
-  -> persistent PostgreSQL queue commit before 202 response
-
-Managed PostgreSQL
-  -> durable cross-instance queue
-  -> unique (device_id, sequence_number)
-  -> SKIP LOCKED claiming for safe concurrent forwarding
-
-Vercel Cron
-  -> GET /api/internal/forward every 10 minutes
-  -> batch upload pending readings to Convex
-
-Convex HTTP Action
-  -> validates signed batch
-  -> de-duplicates and stores final readings
+Sensors --one reading/minute--> ESP32 SPIFFS queue
+ESP32 --signed HTTPS batch of 10--> Vercel API
+Vercel --validated server-signed batch--> Convex HTTP Action
+Convex --accepted/duplicate/rejected sequences--> Vercel --> ESP32
 ```
 
-## Risks
+The ESP32 is the temporary persistent queue. Supabase, PostgreSQL, the forwarding worker, and the GitHub scheduler are not part of this architecture.
 
-- Vercel functions have no durable local disk, so queue state stays in PostgreSQL only.
-- Vercel cron is function-triggered, so the forwarding step must finish within function limits.
-- Function cold starts are acceptable because ingestion durability is in PostgreSQL and the Fastify app is reused at module scope.
-- Horizontal scaling is handled in PostgreSQL with row locking and stale-processing recovery.
+## Reliability Contract
 
-## Folder Structure
+1. The ESP32 writes every reading to SPIFFS before network transmission.
+2. A normal upload starts when at least 10 queued readings exist.
+3. Vercel authenticates the device HMAC and validates every field.
+4. Vercel immediately forwards valid readings to Convex over HTTPS.
+5. Vercel returns success only after Convex returns per-sequence results.
+6. The ESP32 deletes accepted and duplicate sequences only.
+7. Conflicting and permanently rejected records are renamed as local dead-letter files.
+8. Network and temporary server failures leave the batch in SPIFFS for retry.
 
-```text
-.
-├── api/
-│   ├── [...path].ts
-│   ├── healthz.ts
-│   └── internal/
-│       └── forward.ts
-├── convex/
-├── examples/
-├── firmware/
-├── src/
-│   ├── app.ts
-│   ├── config.ts
-│   ├── logger.ts
-│   ├── server.ts
-│   ├── auth/
-│   ├── db/
-│   ├── http/
-│   ├── routes/
-│   ├── scripts/
-│   ├── services/
-│   ├── validation/
-│   └── worker/
-│       ├── backoff.ts
-│       ├── forwardingWorker.ts
-│       └── queueProcessor.ts
-├── .env.example
-├── package.json
-├── tsconfig.json
-└── vercel.json
-```
+Convex prevents duplicate final records with `deviceId + sequenceNumber`.
 
 ## Endpoints
 
-- `POST /api/v1/readings`: ESP32 ingestion endpoint
-- `GET /api/healthz`: Vercel health endpoint
-- `GET /api/internal/forward`: cron-triggered forwarding endpoint
-- `POST /api/v1/readings/batch`: Convex-side batch endpoint
+- `POST /api/v1/readings`: signed ESP32 batch ingestion and direct forwarding
+- `GET /api/healthz`: stateless Vercel service health
+- `POST /api/v1/readings/batch`: authenticated Convex HTTP Action
 
-## ESP32 Integration Points
-
-Only these remain hardware-specific:
-
-- `sensor_reader_collect()`
-- `sensor_reader_get_signal_strength()`
-- `sensor_reader_get_battery_voltage()`
-- `sensor_reader_get_solar_voltage()`
-- `sensor_reader_compute_alarm_flags()`
-
-## Vercel Deployment Notes
-
-- Vercel provides the public HTTPS URL and TLS certificates automatically.
-- The ingestion API runs through [api/[...path].ts](/C:/Users/ENVI-COMM/Desktop/http_server/api/[...path].ts:1).
-- The cron forwarder runs through [api/internal/forward.ts](/C:/Users/ENVI-COMM/Desktop/http_server/api/internal/forward.ts:1).
-- Protect the cron endpoint with `CRON_SECRET`.
-- Keep queue data in managed PostgreSQL, not local files.
-- Set env vars in Vercel for `DATABASE_URL`, HMAC secrets, encryption key, and `CRON_SECRET`.
-
-## Example URLs
-
-- API URL for firmware:
-  `https://your-project.vercel.app/api/v1/readings`
-- Health check:
-  `https://your-project.vercel.app/api/healthz`
-
-## Sample ESP32 Request
+## Device Request
 
 Headers:
 
 - `x-device-id`
-- `x-sequence-number`
+- `x-batch-id`
 - `x-timestamp`
 - `x-credential-version`
 - `x-signature`
 
-Body example: [examples/reading.json](/C:/Users/ENVI-COMM/Desktop/http_server/examples/reading.json:1)
+The HMAC-SHA256 canonical request is:
 
-## Sample Success Response
+```text
+POST
+/api/v1/readings
+<deviceId>
+<batchId>
+<timestamp>
+<credentialVersion>
+<sha256-lowercase-hex-of-raw-body>
+```
+
+See `examples/device-batch.json` for the request body. Production firmware sends 10 readings; the API accepts 1-10 so recovery and diagnostics can use smaller batches.
+
+## Success Response
 
 ```json
 {
-  "status": "accepted",
-  "code": "queued_successfully",
-  "message": "Reading was committed to persistent queue storage.",
+  "status": "ok",
+  "code": "batch_stored",
+  "message": "Convex processed the reading batch.",
   "retryable": false,
-  "serverTime": "2026-07-17T10:00:00.000Z",
   "deviceId": "AQ01",
-  "sequenceNumber": 1842,
-  "queuedAt": "2026-07-17T10:00:00.000Z"
+  "batchId": "AQ01-0000001842-0000001851",
+  "acceptedSequenceNumbers": [1842],
+  "duplicateSequenceNumbers": [],
+  "conflictingSequenceNumbers": [],
+  "rejectedSequenceNumbers": [],
+  "retryableSequenceNumbers": []
 }
 ```
 
-## Curl Test
+The ESP32 treats HTTP `200` plus valid sequence arrays as a completed attempt. HTTP `429` or `5xx`, TLS errors, malformed responses, and missing sequence confirmations retain local files.
 
-```powershell
-curl.exe https://your-project.vercel.app/api/v1/readings `
-  -H "content-type: application/json" `
-  -H "x-device-id: AQ01" `
-  -H "x-sequence-number: 1842" `
-  -H "x-timestamp: 2026-07-17T10:00:00Z" `
-  -H "x-credential-version: 1" `
-  -H "x-signature: <hex-signature>" `
-  --data @examples/reading.json
+## Vercel Environment
+
+Configure the variables in `.env.example`. `DEVICE_CREDENTIALS_JSON` is sensitive and must contain the same unique secret and credential version as each device firmware:
+
+```json
+[
+  {
+    "deviceId": "AQ01",
+    "status": "active",
+    "credentialVersion": 1,
+    "secret": "a-unique-secret-for-this-device"
+  }
+]
 ```
 
-Manual forward test:
+Do not commit real credentials. Remove the old `DATABASE_URL`, `DEVICE_SECRET_ENCRYPTION_KEY`, `FORWARDER_*`, and `CRON_SECRET` variables after direct ingestion is verified.
+
+Copy `firmware/main/config.example.h` to `firmware/main/config.h` for local firmware builds. `config.h` is intentionally ignored because it contains Wi-Fi and device secrets.
+
+## Convex Deployment
+
+Convex requires `CONVEX_HMAC_SECRET`, `CONVEX_CREDENTIAL_VERSION`, and `CONVEX_MAX_SKEW_MS`. The HMAC secret and version must match Vercel.
 
 ```powershell
-curl.exe "https://your-project.vercel.app/api/internal/forward?secret=<CRON_SECRET>"
+npx convex deploy --yes
 ```
 
-## Setup Steps
+## Build And Test
 
-1. Provision managed PostgreSQL.
-2. Add Vercel env vars from [.env.example](/C:/Users/ENVI-COMM/Desktop/http_server/.env.example:1).
-3. Deploy this repo to Vercel.
-4. Register a device with `npm run register-device`.
-5. Deploy Convex and set the matching Convex env vars.
-6. Put `https://your-project.vercel.app/api/v1/readings` into [firmware/main/config.h](/C:/Users/ENVI-COMM/Desktop/http_server/firmware/main/config.h:1) as `NODE_SERVER_URL`.
-7. Flash the ESP32 firmware.
+```powershell
+npm install
+npm test
+npm run build
+```
+
+Firmware from an ESP-IDF Installation Manager PowerShell:
+
+```powershell
+cd C:\Users\ENVI-COMM\Desktop\http_server\firmware
+idf.py set-target esp32s3
+idf.py build
+idf.py -p COM3 flash monitor
+```
+
+Do not flash until Vercel has `DEVICE_CREDENTIALS_JSON` configured and the direct API deployment is healthy.
+
+## Hardware Integration Points
+
+The architecture does not change sensor drivers. Hardware-specific work remains in `sensor_reader.c`, including particulate, gas, temperature/humidity, battery, solar, RSSI, and alarm collection.
 
 ## Troubleshooting
 
-- `401`: wrong device secret, bad timestamp, or HMAC mismatch.
-- `403`: device disabled in PostgreSQL.
-- `409`: reused sequence number with a different payload.
-- `429`: rate-limited device or IP.
-- `503`: PostgreSQL or Convex temporarily unavailable.
-- Forwarding stuck: verify Vercel cron is active and `CRON_SECRET` is set.
+- `400`: headers, batch ID, device ID, or JSON structure do not agree.
+- `401`: device secret/version, timestamp, or signature is wrong.
+- `403`: the device is disabled in `DEVICE_CREDENTIALS_JSON`.
+- `413`: request body or reading count exceeds configured limits.
+- `422`: one or more sensor fields are malformed or implausible.
+- `429`: request rate exceeded; retain and retry.
+- `502` or `503`: Convex did not confirm storage; retain and retry.
+- Queue remains below 10: expected; the next upload occurs when the tenth reading is persisted.

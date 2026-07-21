@@ -1,28 +1,12 @@
 import Fastify from "fastify";
 import helmet from "@fastify/helmet";
-import type { Pool } from "pg";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
-import { runMigrations } from "./db/migrations.js";
-import { DeviceRepository } from "./db/deviceRepository.js";
-import { QueueRepository } from "./db/queueRepository.js";
-import { RateLimitRepository } from "./db/rateLimitRepository.js";
 import { sendStructured } from "./http/responses.js";
 import { healthRoutes } from "./routes/health.js";
 import { readingsRoutes } from "./routes/readings.js";
 
-declare module "fastify" {
-  interface FastifyInstance {
-    pg: Pool;
-    devices: DeviceRepository;
-    queue: QueueRepository;
-    rateLimits: RateLimitRepository;
-  }
-}
-
-export async function buildApp(pool: Pool) {
-  await runMigrations(pool);
-
+export async function buildApp() {
   const app = Fastify({
     loggerInstance: logger,
     bodyLimit: config.requestBodyLimitBytes,
@@ -32,11 +16,6 @@ export async function buildApp(pool: Pool) {
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
     done(null, body);
   });
-
-  app.decorate("pg", pool);
-  app.decorate("devices", new DeviceRepository(pool));
-  app.decorate("queue", new QueueRepository(pool));
-  app.decorate("rateLimits", new RateLimitRepository(pool));
 
   await app.register(helmet);
   await app.register(healthRoutes);

@@ -1,10 +1,10 @@
 import { config } from "../config.js";
-import type { DeviceRecord } from "../types.js";
-import { decryptSecret, hmacSha256Hex, sha256Hex, timingSafeEqualHex } from "./crypto.js";
+import type { DeviceCredential } from "../types.js";
+import { hmacSha256Hex, sha256Hex, timingSafeEqualHex } from "./crypto.js";
 
 export interface DeviceHeaders {
   deviceId: string;
-  sequenceNumber: string;
+  batchId: string;
   timestamp: string;
   credentialVersion: string;
   signature: string;
@@ -15,7 +15,7 @@ export function buildDeviceCanonicalRequest(rawBody: string, headers: DeviceHead
     "POST",
     "/api/v1/readings",
     headers.deviceId,
-    headers.sequenceNumber,
+    headers.batchId,
     headers.timestamp,
     headers.credentialVersion,
     sha256Hex(rawBody)
@@ -30,17 +30,17 @@ export function verifyDeviceTimestamp(timestamp: string): boolean {
   return Math.abs(Date.now() - millis) <= config.deviceRequestMaxSkewMs;
 }
 
-export function selectDeviceSecret(device: DeviceRecord, credentialVersion: number): string | null {
+export function selectDeviceSecret(device: DeviceCredential, credentialVersion: number): string | null {
   if (device.credentialVersion === credentialVersion) {
-    return decryptSecret(device.secretCiphertext, config.deviceSecretEncryptionKey);
+    return device.secret;
   }
-  if (device.previousCredentialVersion === credentialVersion && device.previousSecretCiphertext) {
-    return decryptSecret(device.previousSecretCiphertext, config.deviceSecretEncryptionKey);
+  if (device.previousCredentialVersion === credentialVersion && device.previousSecret) {
+    return device.previousSecret;
   }
   return null;
 }
 
-export function verifyDeviceSignature(rawBody: string, headers: DeviceHeaders, device: DeviceRecord): boolean {
+export function verifyDeviceSignature(rawBody: string, headers: DeviceHeaders, device: DeviceCredential): boolean {
   const credentialVersion = Number(headers.credentialVersion);
   if (!Number.isInteger(credentialVersion)) {
     return false;

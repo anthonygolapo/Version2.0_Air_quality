@@ -1,5 +1,3 @@
-export type QueueStatus = "pending" | "processing" | "sent" | "failed";
-
 export interface AirQualityReading {
   deviceId: string;
   sequenceNumber: number;
@@ -20,27 +18,13 @@ export interface AirQualityReading {
   alarmFlags: number;
 }
 
-export interface QueueRecord extends AirQualityReading {
-  id: string;
-  payloadHash: string;
-  receivedAt: string;
-  status: QueueStatus;
-  retryCount: number;
-  nextRetryAt: string | null;
-  lastError: string | null;
-  claimedBy: string | null;
-  claimedAt: string | null;
-  createdAt: string;
-  sentAt: string | null;
-}
-
-export interface DeviceRecord {
+export interface DeviceCredential {
   deviceId: string;
   status: "active" | "disabled";
   credentialVersion: number;
-  secretCiphertext: string;
-  previousSecretCiphertext: string | null;
-  previousCredentialVersion: number | null;
+  secret: string;
+  previousSecret?: string;
+  previousCredentialVersion?: number;
 }
 
 export interface StructuredResponse {
@@ -59,6 +43,7 @@ export interface ConvexBatchPayload {
 }
 
 export interface ConvexBatchResponse {
+  replay?: boolean;
   acceptedCount: number;
   duplicateCount: number;
   rejectedCount: number;

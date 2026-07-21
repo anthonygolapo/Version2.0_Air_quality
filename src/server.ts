@@ -1,15 +1,13 @@
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
-import { pool } from "./db/postgres.js";
 
 async function main(): Promise<void> {
-  const app = await buildApp(pool);
+  const app = await buildApp();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, "Shutdown signal received");
     await app.close();
-    await pool.end();
     process.exit(0);
   };
 

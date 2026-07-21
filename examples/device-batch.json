@@ -1,0 +1,25 @@
+{
+  "deviceId": "AQ01",
+  "batchId": "AQ01-0000001842-0000001851",
+  "readings": [
+    {
+      "deviceId": "AQ01",
+      "sequenceNumber": 1842,
+      "measuredAt": "2026-07-21T10:00:00.000Z",
+      "pm1": 4.2,
+      "pm25": 7.8,
+      "pm10": 11.3,
+      "co": 0.4,
+      "no2": 0.02,
+      "o3": 0.03,
+      "so2": 0.01,
+      "temperatureC": 29.4,
+      "humidityPercent": 71.2,
+      "batteryVoltage": 4.08,
+      "solarVoltage": 6.35,
+      "signalStrength": -61,
+      "firmwareVersion": "esp32s3-2.0.0",
+      "alarmFlags": 0
+    }
+  ]
+}

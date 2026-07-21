@@ -5,10 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/src/server.js",
-    "worker": "tsx src/worker/forwardingWorker.ts",
-    "register-device": "tsx src/scripts/registerDevice.ts",
     "vercel-build": "tsc -p tsconfig.json"
   },
   "dependencies": {
@@ -16,13 +15,11 @@
     "convex": "^1.42.3",
     "dotenv": "^16.6.1",
     "fastify": "^5.6.0",
-    "pg": "^8.16.3",
     "pino": "^9.9.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "@types/pg": "^8.15.5",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "mbedtls/md.h"
+#include "psa/crypto.h"
 
 static bool sha256_hex(const char *input, char *output, size_t output_size) {
   if (input == NULL || output == NULL || output_size < 65) {
@@ -51,12 +52,12 @@ bool device_auth_build_timestamp(char *output, size_t output_size) {
 
 bool device_auth_build_signature(
   const char *raw_body,
-  uint32_t sequence_number,
+  const char *batch_id,
   const char *timestamp,
   char *signature_hex,
   size_t signature_hex_size
 ) {
-  if (raw_body == NULL || timestamp == NULL || signature_hex == NULL || signature_hex_size < 65) {
+  if (raw_body == NULL || batch_id == NULL || timestamp == NULL || signature_hex == NULL || signature_hex_size < 65) {
     return false;
   }
 
@@ -69,9 +70,9 @@ bool device_auth_build_signature(
   int written = snprintf(
     canonical,
     sizeof(canonical),
-    "POST\n/api/v1/readings\n%s\n%u\n%s\n%d\n%s",
+    "POST\n/api/v1/readings\n%s\n%s\n%s\n%d\n%s",
     DEVICE_ID,
-    (unsigned)sequence_number,
+    batch_id,
     timestamp,
     DEVICE_CREDENTIAL_VERSION,
     payload_hash
@@ -82,17 +83,41 @@ bool device_auth_build_signature(
   }
 
   unsigned char hmac[32];
-  const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (info == NULL) {
+  size_t hmac_length = 0;
+  psa_key_id_t key_id = 0;
+  psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+  const psa_algorithm_t algorithm = PSA_ALG_HMAC(PSA_ALG_SHA_256);
+
+  if (psa_crypto_init() != PSA_SUCCESS) {
     return false;
   }
 
-  if (mbedtls_md_hmac(info,
-      (const unsigned char *)DEVICE_SECRET,
-      strlen(DEVICE_SECRET),
-      (const unsigned char *)canonical,
-      strlen(canonical),
-      hmac) != 0) {
+  psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_MESSAGE);
+  psa_set_key_algorithm(&attributes, algorithm);
+  psa_set_key_type(&attributes, PSA_KEY_TYPE_HMAC);
+
+  psa_status_t status = psa_import_key(
+    &attributes,
+    (const unsigned char *)DEVICE_SECRET,
+    strlen(DEVICE_SECRET),
+    &key_id
+  );
+  psa_reset_key_attributes(&attributes);
+  if (status != PSA_SUCCESS) {
+    return false;
+  }
+
+  status = psa_mac_compute(
+    key_id,
+    algorithm,
+    (const unsigned char *)canonical,
+    strlen(canonical),
+    hmac,
+    sizeof(hmac),
+    &hmac_length
+  );
+  psa_destroy_key(key_id);
+  if (status != PSA_SUCCESS || hmac_length != sizeof(hmac)) {
     return false;
   }
 

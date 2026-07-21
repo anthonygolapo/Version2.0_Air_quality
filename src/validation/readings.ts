@@ -22,6 +22,12 @@ export const readingSchema = z.object({
   alarmFlags: z.number().int().min(0).max(65535)
 });
 
+export const readingBatchSchema = z.object({
+  deviceId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+  batchId: z.string().trim().min(1).max(96).regex(/^[A-Za-z0-9_.:-]+$/),
+  readings: z.array(readingSchema).min(1).max(100)
+});
+
 export type ReadingInput = z.infer<typeof readingSchema>;
 
 export function zodIssuesToDetails(error: z.ZodError) {

@@ -4,10 +4,23 @@ idf_component_register(
     "device_auth.c"
     "http_upload.c"
     "local_queue.c"
+    "reading_json.c"
     "sensor_reader.c"
     "spiffs_init.c"
     "time_sync.c"
     "wifi_manager.c"
   INCLUDE_DIRS "."
-  REQUIRES json esp_http_client esp_wifi esp_netif esp_event spiffs nvs_flash mbedtls driver
+  REQUIRES
+    esp_http_client
+    esp_wifi
+    esp_netif
+    esp_event
+    spiffs
+    nvs_flash
+    mbedtls
+    driver
+    esp_driver_gpio
+    esp_driver_i2c
+    esp_driver_spi
+    esp_driver_uart
 )

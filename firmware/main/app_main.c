@@ -1,9 +1,11 @@
 #include <stdbool.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "config.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,6 +17,7 @@
 #include "wifi_manager.h"
 
 static const char *TAG = "app_main";
+static const size_t MAX_BATCHES_PER_CYCLE = 3;
 
 static uint32_t compute_backoff_ms(uint32_t attempt) {
   uint32_t capped_attempt = attempt > 6 ? 6 : attempt;
@@ -23,28 +26,75 @@ static uint32_t compute_backoff_ms(uint32_t attempt) {
   return base + jitter;
 }
 
-static void flush_queue_once(void) {
-  queued_reading_t queued;
-  uint32_t attempt = 0;
+static bool sequence_in_list(uint32_t sequence, const uint32_t *values, size_t count) {
+  for (size_t index = 0; index < count; index++) {
+    if (values[index] == sequence) return true;
+  }
+  return false;
+}
 
-  while (local_queue_peek_oldest(&queued)) {
+static void flush_ready_batches(void) {
+  uint32_t attempt = 0;
+  size_t batches_sent = 0;
+
+  while (local_queue_count() >= HTTP_UPLOAD_MAX_BATCH_SIZE && batches_sent < MAX_BATCHES_PER_CYCLE) {
+    queued_reading_t queued[HTTP_UPLOAD_MAX_BATCH_SIZE] = {0};
+    size_t queued_count = local_queue_peek_oldest_batch(queued, HTTP_UPLOAD_MAX_BATCH_SIZE);
+    if (queued_count != HTTP_UPLOAD_MAX_BATCH_SIZE) {
+      return;
+    }
+
+    const sensor_reading_t *readings[HTTP_UPLOAD_MAX_BATCH_SIZE];
+    for (size_t index = 0; index < queued_count; index++) readings[index] = &queued[index].reading;
+
+    char batch_id[64];
+    snprintf(
+      batch_id,
+      sizeof(batch_id),
+      "%s-%010u-%010u",
+      DEVICE_ID,
+      (unsigned)queued[0].reading.sequence_number,
+      (unsigned)queued[queued_count - 1].reading.sequence_number
+    );
+
     int status_code = 0;
-    if (http_upload_reading(&queued.reading, &status_code)) {
-      if (!local_queue_delete(queued.path)) {
-        ESP_LOGW(TAG, "Uploaded reading %u but failed to delete queue file %s",
-          queued.reading.sequence_number, queued.path);
+    batch_upload_result_t result;
+    if (http_upload_batch(readings, queued_count, batch_id, &result, &status_code)) {
+      size_t handled = 0;
+      for (size_t index = 0; index < queued_count; index++) {
+        uint32_t sequence = queued[index].reading.sequence_number;
+        if (sequence_in_list(sequence, result.confirmed, result.confirmed_count)) {
+          if (local_queue_delete(queued[index].path)) {
+            handled++;
+            ESP_LOGI(TAG, "Convex confirmed and deleted reading %u", (unsigned)sequence);
+          } else {
+            ESP_LOGW(TAG, "Convex confirmed reading %u but local deletion failed", (unsigned)sequence);
+          }
+        } else if (sequence_in_list(sequence, result.terminal, result.terminal_count)) {
+          if (local_queue_mark_dead_letter(queued[index].path)) {
+            handled++;
+            ESP_LOGE(TAG, "Reading %u moved to dead letter after permanent rejection", (unsigned)sequence);
+          } else {
+            ESP_LOGW(TAG, "Failed to dead-letter reading %u", (unsigned)sequence);
+          }
+        }
+      }
+
+      if (handled == 0) {
+        ESP_LOGW(TAG, "Batch %s returned no terminal sequence results; retaining all files", batch_id);
         return;
       }
+
       attempt = 0;
-      ESP_LOGI(TAG, "Delivered and deleted reading %u", queued.reading.sequence_number);
+      batches_sent++;
       continue;
     }
 
     attempt++;
     uint32_t delay_ms = compute_backoff_ms(attempt);
-    bool retryable = status_code == 0 || status_code == 429 || status_code == 500 || status_code == 503;
-    ESP_LOGW(TAG, "Reading %u not accepted yet, HTTP=%d retryable=%s retry_in_ms=%u",
-      queued.reading.sequence_number, status_code, retryable ? "true" : "false", delay_ms);
+    bool retryable = status_code == 0 || status_code == 429 || status_code >= 500;
+    ESP_LOGW(TAG, "Batch %s not confirmed, HTTP=%d retryable=%s retry_in_ms=%u",
+      batch_id, status_code, retryable ? "true" : "false", (unsigned)delay_ms);
     if (!retryable) {
       delay_ms = UPLOAD_INTERVAL_MS;
     }
@@ -78,7 +128,7 @@ void app_main(void) {
       ESP_LOGE(TAG, "Failed to collect reading or allocate sequence number");
     }
 
-    flush_queue_once();
+    flush_ready_batches();
     ESP_LOGI(TAG, "Queue depth after cycle: %u", (unsigned)local_queue_count());
     vTaskDelay(pdMS_TO_TICKS(UPLOAD_INTERVAL_MS));
   }

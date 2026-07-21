@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { config } from "../config.js";
 import { verifyDeviceSignature, verifyDeviceTimestamp, type DeviceHeaders } from "../auth/deviceAuth.js";
 import { sendStructured } from "../http/responses.js";
-import { DuplicateReadingError } from "../db/queueRepository.js";
-import { zodIssuesToDetails, readingSchema } from "../validation/readings.js";
-import { sha256Hex } from "../auth/crypto.js";
+import { checkRateLimit } from "../rateLimit.js";
+import { ConvexRequestError, sendBatchToConvex } from "../services/convexClient.js";
+import { zodIssuesToDetails, readingBatchSchema } from "../validation/readings.js";
 
 function headerValue(value: string | string[] | undefined): string {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
@@ -12,44 +13,38 @@ function headerValue(value: string | string[] | undefined): string {
 
 export async function readingsRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post("/api/v1/readings", async (request, reply) => {
-    const ip = request.ip;
     const rawBody = typeof request.body === "string" ? request.body : "";
-
-    if (!(await fastify.rateLimits.checkAndIncrement("ip", ip, config.ipRateLimitMax, config.ipRateLimitWindowMs))) {
+    if (!checkRateLimit(`ip:${request.ip}`, config.ipRateLimitMax, config.ipRateLimitWindowMs)) {
       reply.header("retry-after", String(config.deviceRetryAfterSeconds));
       return sendStructured(reply, 429, "error", "rate_limited", "IP rate limit exceeded.", true);
     }
 
     const headers: DeviceHeaders = {
       deviceId: headerValue(request.headers["x-device-id"]),
-      sequenceNumber: headerValue(request.headers["x-sequence-number"]),
+      batchId: headerValue(request.headers["x-batch-id"]),
       timestamp: headerValue(request.headers["x-timestamp"]),
       credentialVersion: headerValue(request.headers["x-credential-version"]),
       signature: headerValue(request.headers["x-signature"])
     };
 
-    if (!headers.deviceId || !headers.sequenceNumber || !headers.timestamp || !headers.credentialVersion || !headers.signature) {
+    if (!headers.deviceId || !headers.batchId || !headers.timestamp || !headers.credentialVersion || !headers.signature) {
       return sendStructured(reply, 400, "error", "invalid_request", "Missing required authentication headers.", false);
     }
-
     if (!verifyDeviceTimestamp(headers.timestamp)) {
       return sendStructured(reply, 401, "error", "authentication_failed", "Request timestamp is expired or invalid.", false);
     }
-
-    if (!(await fastify.rateLimits.checkAndIncrement("device", headers.deviceId, config.deviceRateLimitMax, config.deviceRateLimitWindowMs))) {
+    if (!checkRateLimit(`device:${headers.deviceId}`, config.deviceRateLimitMax, config.deviceRateLimitWindowMs)) {
       reply.header("retry-after", String(config.deviceRetryAfterSeconds));
       return sendStructured(reply, 429, "error", "rate_limited", "Device rate limit exceeded.", true);
     }
 
-    const device = await fastify.devices.findByDeviceId(headers.deviceId);
+    const device = config.deviceCredentials.get(headers.deviceId);
     if (!device) {
       return sendStructured(reply, 401, "error", "authentication_failed", "Unknown device.", false);
     }
-
     if (device.status === "disabled") {
       return sendStructured(reply, 403, "error", "device_disabled", "Device is disabled.", false);
     }
-
     if (!verifyDeviceSignature(rawBody, headers, device)) {
       return sendStructured(reply, 401, "error", "authentication_failed", "Signature verification failed.", false);
     }
@@ -61,41 +56,70 @@ export async function readingsRoutes(fastify: FastifyInstance): Promise<void> {
       return sendStructured(reply, 400, "error", "invalid_request", "Request body must be valid JSON.", false);
     }
 
-    const parsed = readingSchema.safeParse(payload);
+    const parsed = readingBatchSchema.safeParse(payload);
     if (!parsed.success) {
-      return sendStructured(reply, 422, "error", "invalid_sensor_data", "Payload failed validation.", false, {
+      return sendStructured(reply, 422, "error", "invalid_sensor_data", "Batch failed validation.", false, {
         details: zodIssuesToDetails(parsed.error)
       });
     }
-
-    if (parsed.data.deviceId !== headers.deviceId || String(parsed.data.sequenceNumber) !== headers.sequenceNumber) {
-      return sendStructured(reply, 400, "error", "invalid_request", "Signed headers do not match the payload.", false);
+    if (parsed.data.readings.length > config.deviceBatchSize) {
+      return sendStructured(reply, 413, "error", "batch_too_large", `Batch cannot exceed ${config.deviceBatchSize} readings.`, false);
+    }
+    if (parsed.data.deviceId !== headers.deviceId || parsed.data.batchId !== headers.batchId) {
+      return sendStructured(reply, 400, "error", "invalid_request", "Signed headers do not match the batch payload.", false);
     }
 
-    const payloadHash = sha256Hex(rawBody);
-    const receivedAt = new Date().toISOString();
+    const sequenceNumbers = new Set<number>();
+    for (const reading of parsed.data.readings) {
+      if (reading.deviceId !== headers.deviceId) {
+        return sendStructured(reply, 400, "error", "invalid_request", "Every reading must belong to the authenticated device.", false);
+      }
+      if (sequenceNumbers.has(reading.sequenceNumber)) {
+        return sendStructured(reply, 400, "error", "invalid_request", "Batch contains duplicate sequence numbers.", false);
+      }
+      sequenceNumbers.add(reading.sequenceNumber);
+    }
 
+    const receivedAt = new Date().toISOString();
     try {
-      await fastify.queue.enqueue(parsed.data, payloadHash, rawBody, receivedAt);
-      return sendStructured(reply, 202, "accepted", "queued_successfully", "Reading was committed to persistent queue storage.", false, {
-        deviceId: parsed.data.deviceId,
-        sequenceNumber: parsed.data.sequenceNumber,
-        queuedAt: receivedAt
+      // A fresh forwarding ID lets a retried device batch be resolved through
+      // Convex's deviceId + sequenceNumber deduplication contract.
+      const convexBatchId = `${headers.deviceId}:${headers.batchId}:${randomUUID()}`;
+      const result = await sendBatchToConvex(parsed.data.readings, convexBatchId, receivedAt);
+      const rejectedSequenceNumbers = result.rejected
+        .filter((item) => !item.retryable)
+        .map((item) => item.sequenceNumber);
+      const retryableSequenceNumbers = result.rejected
+        .filter((item) => item.retryable)
+        .map((item) => item.sequenceNumber);
+
+      return sendStructured(reply, 200, "ok", "batch_stored", "Convex processed the reading batch.", false, {
+        deviceId: headers.deviceId,
+        batchId: headers.batchId,
+        acceptedSequenceNumbers: result.acceptedSequenceNumbers,
+        duplicateSequenceNumbers: result.duplicateSequenceNumbers,
+        conflictingSequenceNumbers: result.conflictingSequenceNumbers,
+        rejectedSequenceNumbers,
+        retryableSequenceNumbers,
+        acceptedCount: result.acceptedCount,
+        duplicateCount: result.duplicateCount,
+        conflictingCount: result.conflictingCount,
+        rejectedCount: result.rejectedCount
       });
     } catch (error) {
-      if (error instanceof DuplicateReadingError) {
-        return sendStructured(
-          reply,
-          409,
-          "error",
-          error.conflicting ? "conflicting_duplicate" : "duplicate_reading",
-          error.conflicting ? "Sequence number already exists with a different payload." : "Reading already queued.",
-          false
-        );
+      const transient = error instanceof ConvexRequestError ? error.transient : true;
+      request.log.error({ err: error, deviceId: headers.deviceId, batchId: headers.batchId }, "Direct Convex forwarding failed");
+      if (error instanceof ConvexRequestError && error.retryAfterMs) {
+        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
       }
-
-      request.log.error({ err: error, deviceId: headers.deviceId }, "Persistent queue write failed");
-      return sendStructured(reply, 503, "error", "temporary_storage_failure", "Persistent queue storage is temporarily unavailable.", true);
+      return sendStructured(
+        reply,
+        transient ? 503 : 502,
+        "error",
+        "convex_forwarding_failed",
+        "Convex did not confirm storage; retain the local batch and retry.",
+        transient
+      );
     }
   });
 }

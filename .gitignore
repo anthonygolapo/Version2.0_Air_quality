@@ -8,6 +8,8 @@ data/certs/server.crt
 data/certs/server.key
 firmware/build/
 firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/main/config.h
 
 .vercel
 .env*

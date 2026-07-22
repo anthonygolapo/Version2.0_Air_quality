@@ -19,6 +19,7 @@
 
 static const char *TAG = "app_main";
 static const size_t MAX_BATCHES_PER_CYCLE = 3;
+static const uint32_t UPLOADER_TASK_STACK_SIZE = 16 * 1024;
 static queued_reading_t batch_queue[HTTP_UPLOAD_MAX_BATCH_SIZE];
 static const sensor_reading_t *batch_readings[HTTP_UPLOAD_MAX_BATCH_SIZE];
 
@@ -105,12 +106,13 @@ static void flush_ready_batches(void) {
   }
 }
 
-void app_main(void) {
+static void uploader_task(void *context) {
+  (void)context;
   ESP_LOGI(TAG, "Starting air-quality uploader firmware");
 
   if (!spiffs_init() || !local_queue_init()) {
     ESP_LOGE(TAG, "Local persistent queue initialization failed");
-    return;
+    vTaskDelete(NULL);
   }
 
   sensor_reading_t reading;
@@ -133,5 +135,19 @@ void app_main(void) {
     flush_ready_batches();
     ESP_LOGI(TAG, "Queue depth after cycle: %u", (unsigned)local_queue_count());
     vTaskDelay(pdMS_TO_TICKS(UPLOAD_INTERVAL_MS));
+  }
+}
+
+void app_main(void) {
+  BaseType_t created = xTaskCreate(
+    uploader_task,
+    "air_quality_uploader",
+    UPLOADER_TASK_STACK_SIZE,
+    NULL,
+    5,
+    NULL
+  );
+  if (created != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create uploader task");
   }
 }

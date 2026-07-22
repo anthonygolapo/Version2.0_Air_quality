@@ -148,6 +148,10 @@ bool http_upload_batch(
   int response_code = esp_http_client_get_status_code(client);
   if (status_code != NULL) *status_code = response_code;
   ESP_LOGI(TAG, "Managed API returned HTTP %d for batch %s", response_code, batch_id);
+  if (response_code != 200 && response_buffer.length > 0 && !response_buffer.overflowed) {
+    // Structured API errors contain validation paths but never device secrets.
+    ESP_LOGW(TAG, "Managed API error response: %s", response_buffer.data);
+  }
 
   bool parsed = false;
   if (response_code == 200 && !response_buffer.overflowed) {

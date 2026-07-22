@@ -98,6 +98,17 @@ static dgs2_reading_t g_so2_reading;
 static sps30_reading_t g_sps30_reading;
 static env_reading_t g_env_reading;
 
+static float normalized_dgs2_ppb(const dgs2_reading_t *reading) {
+  if (reading == NULL || !reading->valid) {
+    return 0.0f;
+  }
+  if (reading->ppb < 0) {
+    ESP_LOGW(TAG, "[%s] PPB=%" PRId32 " is below zero; storing 0 ppb", reading->sensor_name, reading->ppb);
+    return 0.0f;
+  }
+  return (float)reading->ppb;
+}
+
 static void format_now_iso8601(char *buffer, size_t size) {
   time_t now = time(NULL);
   struct tm utc_tm;
@@ -927,10 +938,10 @@ bool sensor_reader_collect(sensor_reading_t *reading) {
   reading->pm1 = g_sps30_reading.valid ? g_sps30_reading.pm1_0 : 0.0f;
   reading->pm25 = g_sps30_reading.valid ? g_sps30_reading.pm2_5 : 0.0f;
   reading->pm10 = g_sps30_reading.valid ? g_sps30_reading.pm10 : 0.0f;
-  reading->co = g_co_reading.valid ? (float)g_co_reading.ppb : 0.0f;
-  reading->no2 = g_no2_reading.valid ? (float)g_no2_reading.ppb : 0.0f;
-  reading->o3 = g_o3_reading.valid ? (float)g_o3_reading.ppb : 0.0f;
-  reading->so2 = g_so2_reading.valid ? (float)g_so2_reading.ppb : 0.0f;
+  reading->co = normalized_dgs2_ppb(&g_co_reading);
+  reading->no2 = normalized_dgs2_ppb(&g_no2_reading);
+  reading->o3 = normalized_dgs2_ppb(&g_o3_reading);
+  reading->so2 = normalized_dgs2_ppb(&g_so2_reading);
   reading->temperature_c = g_env_reading.valid ? g_env_reading.temperature_c : 0.0f;
   reading->humidity_percent = g_env_reading.valid ? g_env_reading.humidity_percent : 0.0f;
   reading->battery_voltage = sensor_reader_get_battery_voltage();

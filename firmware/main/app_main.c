@@ -37,6 +37,21 @@ static bool sequence_in_list(uint32_t sequence, const uint32_t *values, size_t c
   return false;
 }
 
+static void normalize_queued_gas_values(sensor_reading_t *reading) {
+  bool changed = false;
+  float *gas_values[] = {&reading->co, &reading->no2, &reading->o3, &reading->so2};
+  for (size_t index = 0; index < sizeof(gas_values) / sizeof(gas_values[0]); index++) {
+    if (*gas_values[index] < 0.0f) {
+      *gas_values[index] = 0.0f;
+      changed = true;
+    }
+  }
+  if (changed) {
+    ESP_LOGW(TAG, "Normalized negative DGS2 value in queued reading %u to 0 ppb",
+      (unsigned)reading->sequence_number);
+  }
+}
+
 static void flush_ready_batches(void) {
   uint32_t attempt = 0;
   size_t batches_sent = 0;
@@ -48,7 +63,10 @@ static void flush_ready_batches(void) {
       return;
     }
 
-    for (size_t index = 0; index < queued_count; index++) batch_readings[index] = &batch_queue[index].reading;
+    for (size_t index = 0; index < queued_count; index++) {
+      normalize_queued_gas_values(&batch_queue[index].reading);
+      batch_readings[index] = &batch_queue[index].reading;
+    }
 
     char batch_id[64];
     snprintf(

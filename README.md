@@ -74,6 +74,8 @@ See `examples/device-batch.json` for the request body. Production firmware sends
 
 The ESP32 treats HTTP `200` plus valid sequence arrays as a completed attempt. HTTP `429` or `5xx`, TLS errors, malformed responses, and missing sequence confirmations retain local files.
 
+DGS2 gas fields (`co`, `no2`, `o3`, and `so2`) are transmitted and stored in ppb. The configured models are 97x-100 CO, 97x-500 NO2, 97x-400 O3, and 97x-600 SO2.
+
 ## Vercel Environment
 
 Configure the variables in `.env.example`. `DEVICE_CREDENTIALS_JSON` is sensitive and must contain the same unique secret and credential version as each device firmware:

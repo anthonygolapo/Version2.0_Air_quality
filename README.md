@@ -109,7 +109,10 @@ npx convex deploy --yes
 npm install
 npm test
 npm run build
+npm run check:api
 ```
+
+`npm run check:api` sends a signed sequence-0 diagnostic using the credentials in the ignored `firmware/main/config.h`. It never prints the device secret. An accepted, duplicate, or conflicting sequence-0 result confirms that Vercel authenticated and validated the request and received a result from Convex.
 
 Firmware from an ESP-IDF Installation Manager PowerShell:
 

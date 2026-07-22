@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "check:api": "node scripts/check-reading-api.mjs",
     "test": "tsx --test tests/*.test.ts",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/src/server.js",

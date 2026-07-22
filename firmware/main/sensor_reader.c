@@ -22,10 +22,10 @@ static const char *TAG = "sensor_reader";
 
 static const int LED_PIN = 2;
 
-static const uint32_t SPS30_WARMUP_DELAY_MS = 30000;
 static const uint32_t DGS2_READ_TIMEOUT_MS = 1500;
 static const uint8_t DGS2_MAX_RETRIES = 3;
 static const uint8_t SPS30_MAX_RETRIES = 3;
+static const uint32_t SPS30_COMMAND_DELAY_MS = 20;
 
 static const gpio_num_t I2C_SDA_PIN = GPIO_NUM_8;
 static const gpio_num_t I2C_SCL_PIN = GPIO_NUM_9;
@@ -258,11 +258,22 @@ static esp_err_t sps30_read_after_command(uint16_t command, uint8_t *buffer, siz
     (uint8_t)(command >> 8),
     (uint8_t)(command & 0xFF)
   };
-  return i2c_master_write_read_device(
+  esp_err_t error = i2c_master_write_to_device(
     I2C_NUM_0,
     SPS30_I2C_ADDRESS,
     command_bytes,
     sizeof(command_bytes),
+    pdMS_TO_TICKS(200)
+  );
+  if (error != ESP_OK) {
+    return error;
+  }
+
+  // SPS30 commands require processing time before the response is read.
+  vTaskDelay(pdMS_TO_TICKS(SPS30_COMMAND_DELAY_MS));
+  return i2c_master_read_from_device(
+    I2C_NUM_0,
+    SPS30_I2C_ADDRESS,
     buffer,
     length,
     pdMS_TO_TICKS(200)
@@ -901,15 +912,12 @@ bool sensor_reader_collect(sensor_reading_t *reading) {
     g_sps30_ready = ensure_sps30_measurement_running();
   }
 
-  ESP_LOGI(TAG, "[APP] Waiting %u ms for SPS30 stabilization before reading sensors.", SPS30_WARMUP_DELAY_MS);
-  vTaskDelay(pdMS_TO_TICKS(SPS30_WARMUP_DELAY_MS));
-
-  collect_gas_and_environment();
   if (g_sps30_ready) {
     read_sps30(&g_sps30_reading);
   } else {
     ESP_LOGW(TAG, "[SPS30] Sensor unavailable. PM values marked invalid.");
   }
+  collect_gas_and_environment();
 
   memset(reading, 0, sizeof(*reading));
   snprintf(reading->device_id, sizeof(reading->device_id), "%s", DEVICE_ID);
